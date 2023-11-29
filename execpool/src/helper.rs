@@ -1,11 +1,14 @@
-use crate::{config::ExecutionCommittee, mempool::MempoolMessage};
+use crate::config::ExecutionCommittee;
 use bytes::Bytes;
 use crypto::{Digest, PublicKey};
 use log::{error, warn};
 use network::SimpleSender;
 use store::Store;
 use tokio::sync::mpsc::Receiver;
-use types::EBlock;
+
+#[cfg(test)]
+#[path = "tests/helper_tests.rs"]
+pub mod helper_tests;
 
 /// A task dedicated to help other authorities by replying to their batch requests.
 pub struct Helper {
@@ -14,7 +17,7 @@ pub struct Helper {
     /// The persistent storage.
     store: Store,
     /// Input channel to receive batch requests.
-    rx_request: Receiver<(Digest, PublicKey)>,
+    rx_request: Receiver<(Vec<Digest>, PublicKey)>,
     /// A network sender to send the batches to the other mempools.
     network: SimpleSender,
 }
@@ -23,7 +26,7 @@ impl Helper {
     pub fn spawn(
         committee: ExecutionCommittee,
         store: Store,
-        rx_request: Receiver<(Digest, PublicKey)>,
+        rx_request: Receiver<(Vec<Digest>, PublicKey)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -38,7 +41,9 @@ impl Helper {
     }
 
     async fn run(&mut self) {
-        while let Some((digest, origin)) = self.rx_request.recv().await {
+        while let Some((digests, origin)) = self.rx_request.recv().await {
+            // TODO [issue #7]: Do some accounting to prevent bad nodes from monopolizing our resources.
+
             // get the requestors address.
             let address = match self.committee.mempool_address(&origin) {
                 Some(x) => x,
@@ -49,17 +54,12 @@ impl Helper {
             };
 
             // Reply to the request (the best we can).
-            match self.store.read(digest.to_vec()).await {
-                Ok(Some(data)) => {
-                    let eblock: EBlock =
-                        bincode::deserialize(&data).expect("failed to deseriablize eblock");
-                    let message = MempoolMessage::SyncEBlock(eblock.clone());
-                    let serialized = bincode::serialize(&message)
-                        .expect("Failed to serialize our own MempoolMessage EBlock");
-                    self.network.send(address, Bytes::from(serialized)).await;
+            for digest in digests {
+                match self.store.read(digest.to_vec()).await {
+                    Ok(Some(data)) => self.network.send(address, Bytes::from(data)).await,
+                    Ok(None) => (),
+                    Err(e) => error!("{}", e),
                 }
-                Ok(None) => (),
-                Err(e) => error!("{}", e),
             }
         }
     }

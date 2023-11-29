@@ -6,6 +6,10 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
+#[path = "tests/aggregator_tests.rs"]
+pub mod aggregator_tests;
+
 pub struct Aggregator {
     committee: Committee,
     votes_aggregators: HashMap<Round, HashMap<Digest, Box<QCMaker>>>,
@@ -22,6 +26,9 @@ impl Aggregator {
     }
 
     pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {
+        // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
+        // with different round numbers or different digests.
+
         // Add the new vote to our aggregator and see if we have a QC.
         self.votes_aggregators
             .entry(vote.round)
@@ -32,6 +39,9 @@ impl Aggregator {
     }
 
     pub fn add_timeout(&mut self, timeout: Timeout) -> ConsensusResult<Option<TC>> {
+        // TODO: A bad node may make us run out of memory by sending many timeouts
+        // with different round numbers.
+
         // Add the new timeout to our aggregator and see if we have a TC.
         self.timeouts_aggregators
             .entry(timeout.round)

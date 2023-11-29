@@ -257,7 +257,6 @@ class NodeParameters:
         try:
             inputs += [json["consensus"]["timeout_delay"]]
             inputs += [json["consensus"]["sync_retry_delay"]]
-            inputs += [json["consensus"]["cblock_batch_size"]]
             inputs += [json["mempool"]["gc_depth"]]
             inputs += [json["mempool"]["sync_retry_delay"]]
             inputs += [json["mempool"]["sync_retry_nodes"]]
@@ -284,7 +283,6 @@ class ExecutorParameters:
         try:
             inputs += [json["consensus"]["certify_timeout_delay"]]
             inputs += [json["consensus"]["certify_sync_retry_delay"]]
-            inputs += [json["mempool"]["certify_cross_shard_ratio"]]
             inputs += [json["mempool"]["certify_gc_depth"]]
             inputs += [json["mempool"]["certify_sync_retry_delay"]]
             inputs += [json["mempool"]["certify_sync_retry_nodes"]]
@@ -293,8 +291,8 @@ class ExecutorParameters:
         except KeyError as e:
             raise ConfigError(f"Malformed parameters: missing key {e}")
 
-        # if not all(isinstance(x, int) for x in inputs):
-        #     raise ConfigError("Invalid parameters type")
+        if not all(isinstance(x, int) for x in inputs):
+            raise ConfigError("Invalid parameters type")
 
         self.certify_timeout_delay = json["consensus"]["certify_timeout_delay"]
         self.json = json
@@ -312,14 +310,15 @@ class BenchParameters:
             nodes = nodes if isinstance(nodes, list) else [nodes]
             if not nodes or any(x <= 1 for x in nodes):
                 raise ConfigError("Missing or invalid number of nodes")
-            shard_faults = json["shard_faults"]
-            shard_faults = shard_faults if isinstance(shard_faults, list) else [shard_faults]
-            
+
             rate = json["rate"]
             rate = rate if isinstance(rate, list) else [rate]
             if not rate:
                 raise ConfigError("Missing input rate")
 
+            shard_faults = json["shard_faults"]
+            shard_faults = shard_faults if isinstance(shard_faults, list) else [shard_faults]
+            
             self.nodes = [int(x) for x in nodes]
             self.rate = [int(x) for x in rate]
             self.tx_size = int(json["tx_size"])

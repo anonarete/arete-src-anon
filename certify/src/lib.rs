@@ -1,14 +1,22 @@
 #[macro_use]
 mod error;
+mod aggregator;
 mod config;
 mod confirm_executor;
 mod consensus;
 mod core;
 mod helper;
+mod leader;
 mod mempool;
+mod messages;
 mod proposer;
-mod quorum_waiter;
-mod vote_maker;
+mod synchronizer;
+mod timer;
 
-pub use crate::config::{CertifyParameters, ExecutionCommittee};
+#[cfg(test)]
+#[path = "tests/common.rs"]
+mod common;
+
+pub use crate::config::{ExecutionCommittee, CertifyParameters};
 pub use crate::consensus::Consensus;
+pub use crate::messages::{EBlock, QC, TC};

@@ -5,10 +5,14 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::convert::TryInto;
 use std::fmt;
-use types::{CBlockMeta, VoteResult};
+use types::CBlockMeta;
+
+#[cfg(test)]
+#[path = "tests/messages_tests.rs"]
+pub mod messages_tests;
 
 // Ordering block
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -16,20 +20,20 @@ pub struct OBlock {
     pub qc: QC,
     pub tc: Option<TC>,
     pub author: PublicKey,
-    pub round: Round,
-    pub payload: Vec<CBlockMeta>, // replace Digest with CBlockMeta for consensus
-    pub aggregators: Vec<VoteResult>, // collect votes from execution shards to aggregators
+    pub round: Round, 
+    pub payload: Vec<CBlockMeta>,   // replace Digest with CBlockMeta for consensus
+    pub aggregators: HashMap<Digest, u8>,  // collect votes from execution shards to aggregators
     pub signature: Signature,
 }
 
 impl OBlock {
     pub async fn new(
         qc: QC,
-        tc: Option<TC>,
+        tc: Option<TC>, 
         author: PublicKey,
         round: Round,
         payload: Vec<CBlockMeta>,
-        aggregators: Vec<VoteResult>,
+        aggregators: HashMap<Digest, u8>,
         mut signature_service: SignatureService,
     ) -> Self {
         let block = Self {
@@ -79,10 +83,11 @@ impl OBlock {
     pub fn get_digests(&self) -> Vec<Digest> {
         let mut digests = Vec::new();
         for x in self.payload.clone() {
-            digests.push(x.ebhash);
+            digests.push(x.hash);
         }
         digests
     }
+
 }
 
 impl Hash for OBlock {
@@ -91,9 +96,6 @@ impl Hash for OBlock {
         hasher.update(self.author.0);
         hasher.update(self.round.to_le_bytes());
         for x in &self.payload {
-            hasher.update(x.digest());
-        }
-        for x in &self.aggregators {
             hasher.update(x.digest());
         }
         hasher.update(&self.qc.hash);
@@ -105,13 +107,12 @@ impl fmt::Debug for OBlock {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B({}, {}, {:?}, num of cblocks {}, num of aggregators {})",
+            "{}: B({}, {}, {:?}, {})",
             self.digest(),
             self.author,
             self.round,
             self.qc,
-            self.payload.len(),
-            self.aggregators.len(),
+            self.payload.iter().map(|x| x.size()).sum::<usize>(),
         )
     }
 }
@@ -121,6 +122,7 @@ impl fmt::Display for OBlock {
         write!(f, "B{}", self.round)
     }
 }
+
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {

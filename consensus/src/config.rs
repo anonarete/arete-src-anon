@@ -6,12 +6,12 @@ use std::net::SocketAddr;
 
 pub type Stake = u32;
 pub type EpochNumber = u128;
+// pub type ShardNumber = u32;
 
 #[derive(Serialize, Deserialize)]
 pub struct Parameters {
     pub timeout_delay: u64,
     pub sync_retry_delay: u64,
-    pub cblock_batch_size: u64,
 }
 
 impl Default for Parameters {
@@ -19,7 +19,6 @@ impl Default for Parameters {
         Self {
             timeout_delay: 5_000,
             sync_retry_delay: 10_000,
-            cblock_batch_size: 100,
         }
     }
 }
@@ -29,7 +28,6 @@ impl Parameters {
         // NOTE: These log entries are used to compute performance.
         info!("Timeout delay set to {} rounds", self.timeout_delay);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
-        info!("CBlock batch size set to {}", self.cblock_batch_size);
     }
 }
 
@@ -38,6 +36,7 @@ pub struct Authority {
     pub stake: Stake,
     pub address: SocketAddr,
 }
+
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Committee {
@@ -68,6 +67,8 @@ impl Committee {
     }
 
     pub fn quorum_threshold(&self) -> Stake {
+        // If N = 3f + 1 + k (0 <= k < 3)
+        // then (2 N + 3) / 3 = 2f + 1 + (2k + 2)/3 = 2f + 1 + k = N - f
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
         2 * total_votes / 3 + 1
     }

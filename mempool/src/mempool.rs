@@ -1,4 +1,4 @@
-use crate::batch_maker::{BatchMaker, CBlockBatch};
+use crate::batch_maker::{Batch, BatchMaker};
 use crate::config::{Committee, Parameters};
 use crate::helper::Helper;
 use crate::processor::{Processor, SerializedBatchMessage};
@@ -14,7 +14,11 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use types::{CBlock, CertifyMessage, CrossTransactionVote};
+use types::CBlock;
+
+#[cfg(test)]
+#[path = "tests/mempool_tests.rs"]
+pub mod mempool_tests;
 
 /// The default channel capacity for each channel of the mempool.
 pub const CHANNEL_CAPACITY: usize = 1_000;
@@ -25,10 +29,9 @@ pub type Round = u64;
 /// The message exchanged between the nodes' mempool.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum MempoolMessage {
-    Batch(CBlockBatch),
+    Batch(Batch),
     BatchRequest(Vec<Digest>, /* origin */ PublicKey),
     CBlock(CBlock),
-    CrossTransactionVote(CrossTransactionVote),
 }
 
 /// The messages sent by the consensus and the mempool.
@@ -49,6 +52,8 @@ pub struct Mempool {
     parameters: Parameters,
     /// The persistent storage.
     store: Store,
+    /// Send messages to consensus.
+    // tx_consensus: Sender<Digest>,
     /// Send cblock (consensus) to consensus.
     tx_cblock: Sender<CBlock>,
 }
@@ -60,7 +65,6 @@ impl Mempool {
         parameters: Parameters,
         store: Store,
         rx_consensus: Receiver<ConsensusMempoolMessage>,
-        tx_ctx_vote: Sender<CrossTransactionVote>,
         tx_cblock: Sender<CBlock>,
     ) {
         // NOTE: This log entry is used to compute performance.
@@ -72,14 +76,13 @@ impl Mempool {
             committee,
             parameters,
             store,
-            // tx_ctx_vote,
             tx_cblock,
         };
 
         // Spawn all mempool tasks.
         mempool.handle_consensus_messages(rx_consensus);
-        mempool.handle_clients_transactions(tx_ctx_vote.clone());
-        mempool.handle_mempool_messages(tx_ctx_vote);
+        mempool.handle_clients_transactions();
+        mempool.handle_mempool_messages();
 
         info!(
             "Mempool successfully booted on {}",
@@ -107,11 +110,10 @@ impl Mempool {
     }
 
     /// Spawn all tasks responsible to handle clients transactions.
-    fn handle_clients_transactions(&self, tx_ctx_vote: Sender<CrossTransactionVote>) {
+    fn handle_clients_transactions(&self) {
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);
         let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);
-        let (tx_mempool_ctx_vote, cx_mempool_ctx_vote) = channel(CHANNEL_CAPACITY);
 
         // We first receive clients' transactions from the network.
         let mut address = self
@@ -121,12 +123,7 @@ impl Mempool {
         address.set_ip("0.0.0.0".parse().unwrap());
         NetworkReceiver::spawn(
             address,
-            /* handler */
-            TxReceiverHandler {
-                tx_batch_maker,
-                tx_ctx_vote,
-                tx_mempool_ctx_vote,
-            },
+            /* handler */ TxReceiverHandler { tx_batch_maker },
         );
 
         // The transactions are sent to the `BatchMaker` that assembles them into batches. It then broadcasts
@@ -136,7 +133,6 @@ impl Mempool {
             self.parameters.batch_size,
             self.parameters.max_batch_delay,
             /* rx_transaction */ rx_batch_maker,
-            cx_mempool_ctx_vote,
             /* tx_message */ tx_quorum_waiter,
             /* mempool_addresses */
             self.committee.broadcast_addresses(&self.name),
@@ -155,15 +151,15 @@ impl Mempool {
         Processor::spawn(
             self.store.clone(),
             /* rx_batch */ rx_processor,
-            /* tx_cblock */
-            self.tx_cblock.clone(),
+            // /* tx_digest */ self.tx_consensus.clone(),
+            /* tx_cblock */ self.tx_cblock.clone(),
         );
 
         info!("Mempool listening to client transactions on {}", address);
     }
 
     /// Spawn all tasks responsible to handle messages from other mempools.
-    fn handle_mempool_messages(&self, tx_ctx_vote: Sender<CrossTransactionVote>) {
+    fn handle_mempool_messages(&self) {
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);
 
@@ -179,7 +175,6 @@ impl Mempool {
             MempoolReceiverHandler {
                 tx_helper,
                 tx_processor,
-                tx_ctx_vote,
             },
         );
 
@@ -195,8 +190,8 @@ impl Mempool {
         Processor::spawn(
             self.store.clone(),
             /* rx_batch */ rx_processor,
-            /* tx_cblock */
-            self.tx_cblock.clone(),
+            // /* tx_digest */ self.tx_consensus.clone(),
+            /* tx_cblock */ self.tx_cblock.clone(),
         );
 
         info!("Mempool listening to mempool messages on {}", address);
@@ -206,39 +201,25 @@ impl Mempool {
 /// Defines how the network receiver handles incoming transactions (cblocks).
 #[derive(Clone)]
 struct TxReceiverHandler {
+    // tx_batch_maker: Sender<Transaction>,
     tx_batch_maker: Sender<CBlock>,
-    tx_ctx_vote: Sender<CrossTransactionVote>,
-    tx_mempool_ctx_vote: Sender<CrossTransactionVote>,
 }
 
 #[async_trait]
 impl MessageHandler for TxReceiverHandler {
-    async fn dispatch(
-        &self,
-        _writer: &mut Writer,
-        serialized: Bytes,
-    ) -> Result<(), Box<dyn Error>> {
-        match bincode::deserialize(&serialized) {
-            // Receive Batch: send it to processor
-            // serialized is SerializedBatchMessage (i.e., serialized Vec<Transaction>)), which is generated by QuorumWaiter
-            Ok(CertifyMessage::CBlock(cblock)) => self
-                .tx_batch_maker
-                .send(cblock)
-                .await
-                .expect("Failed to send batch"),
-            Ok(CertifyMessage::CtxVote(votes)) => {
-                self.tx_ctx_vote
-                    .send(votes.clone())
-                    .await
-                    .expect("Failed to send batch request");
-                // Send it to the batch maker where the vote will be broadcast as a MempoolMessage
-                self.tx_mempool_ctx_vote
-                    .send(votes)
-                    .await
-                    .expect("Failed to send batch request")
-            }
-            Err(e) => warn!("Serialization error: {}", e),
-        }
+    async fn dispatch(&self, _writer: &mut Writer, message: Bytes) -> Result<(), Box<dyn Error>> {
+        let rec_block: CBlock = bincode::deserialize(&message.to_vec())
+            .expect("fail to deserialize the CBlock");
+        info!("node receives msg {:?}, get shard id is {}", rec_block, rec_block.shard_id);
+        // Convert CBlock to Vec<u8>
+        // let tx = bincode::serialize(&rec_block)
+            // .expect("fail to serialize the CBlock");
+        // let tx = message.to_vec();
+        // Send the transaction to the batch maker.
+        self.tx_batch_maker
+            .send(rec_block)
+            .await
+            .expect("Failed to send transaction");
 
         // Give the change to schedule other tasks.
         tokio::task::yield_now().await;
@@ -251,7 +232,6 @@ impl MessageHandler for TxReceiverHandler {
 struct MempoolReceiverHandler {
     tx_helper: Sender<(Vec<Digest>, PublicKey)>,
     tx_processor: Sender<SerializedBatchMessage>,
-    tx_ctx_vote: Sender<CrossTransactionVote>,
 }
 
 #[async_trait]
@@ -262,9 +242,9 @@ impl MessageHandler for MempoolReceiverHandler {
 
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized) {
-            // Receive Batch: send it to processor
+            // Receive Batch: send it to processor 
             // serialized is SerializedBatchMessage (i.e., serialized Vec<Transaction>)), which is generated by QuorumWaiter
-            Ok(MempoolMessage::Batch(_cblocks)) => self
+            Ok(MempoolMessage::Batch(..)) => self
                 .tx_processor
                 .send(serialized.to_vec())
                 .await
@@ -277,12 +257,6 @@ impl MessageHandler for MempoolReceiverHandler {
             Ok(MempoolMessage::CBlock(_cblock)) => self
                 .tx_processor
                 .send(serialized.to_vec())
-                .await
-                .expect("Failed to send batch"),
-            // Send it to the consensus module
-            Ok(MempoolMessage::CrossTransactionVote(ctx_vote)) => self
-                .tx_ctx_vote
-                .send(ctx_vote)
                 .await
                 .expect("Failed to send batch"),
             Err(e) => warn!("Serialization error: {}", e),

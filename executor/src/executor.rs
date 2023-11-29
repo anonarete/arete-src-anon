@@ -1,25 +1,25 @@
 use crate::config::Export as _;
 use crate::config::{Committee, ConfigError, Parameters, Secret};
 use anyhow::Result;
-use certify::Consensus;
-use crypto::SignatureService;
+use certify::{Consensus, EBlock};
+use crypto::{Hash, SignatureService};
 use execpool::Mempool;
 use log::info;
 use network::SimpleSender;
 use rand::seq::IteratorRandom;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
-use types::CertifyMessage;
+use types::CBlock;
 
 /// The default channel capacity for this module.
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
 // Executor is the replica in the ordering shard
 pub struct Executor {
-    pub certify: Receiver<CertifyMessage>,
-    pub ordering_addrs: Vec<SocketAddr>,
-    pub default_addr: SocketAddr,
+    pub commit: Receiver<EBlock>,
+    pub ordering_addr: SocketAddr,
     pub shard_id: u32,
 }
 
@@ -30,7 +30,7 @@ impl Executor {
         store_path: &str,
         parameters: Option<String>,
     ) -> Result<Self, ConfigError> {
-        let (tx_certify, rx_certify) = channel(CHANNEL_CAPACITY);
+        let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_to_mempool, rx_consensus_to_mempool) = channel(CHANNEL_CAPACITY);
         let (tx_mempool_to_consensus, rx_mempool_to_consensus) = channel(CHANNEL_CAPACITY);
         let (tx_confirm_mempool_to_consensus, rx_confirm_mempool_to_consensus) =
@@ -60,17 +60,7 @@ impl Executor {
             let (_name, _target_addr) = name_addr;
             target_addr = *_target_addr;
         }
-        info!(
-            "Executor chooses default ordering shard address {}",
-            target_addr
-        );
-
-        let ordering_addrs: Vec<_> = committee
-            .order_transaction_addresses
-            .clone()
-            .values()
-            .map(|addr| *addr)
-            .collect();
+        info!("Executor chooses ordering shard address {}", target_addr);
 
         // Make the data store.
         let store = Store::new(store_path).expect("Failed to create store");
@@ -81,8 +71,6 @@ impl Executor {
         // Make a new mempool.
         Mempool::spawn(
             name,
-            committee.shard.clone(),
-            signature_service.clone(),
             committee.mempool,
             parameters.mempool,
             store.clone(),
@@ -96,20 +84,20 @@ impl Executor {
             name,
             committee.consensus,
             parameters.consensus,
-            committee.shard.clone(),
-            signature_service.clone(),
+            committee.shard,
+            signature_service,
             store,
             rx_mempool_to_consensus,
             tx_consensus_to_mempool,
-            tx_certify,
+            tx_commit,
             rx_confirm_mempool_to_consensus,
         );
 
         info!("Executor {} successfully booted", name);
+        // info!("Executor connects nodes with address {}", target);
         Ok(Self {
-            certify: rx_certify,
-            ordering_addrs: ordering_addrs,
-            default_addr: target_addr,
+            commit: rx_commit,
+            ordering_addr: target_addr,
             shard_id: shard_id,
         })
     }
@@ -118,12 +106,25 @@ impl Executor {
         Secret::new().write(filename)
     }
 
-    pub async fn send_certificate_message(&mut self) -> Result<()> {
-        let mut sender = SimpleSender::new();
-        while let Some(_cmsg) = self.certify.recv().await {
-            let message = bincode::serialize(&_cmsg.clone()).expect("fail to serialize the CBlock");
-            // TODO: random or broadcast?
-            sender.send(self.default_addr, Into::into(message)).await;
+    pub async fn analyze_block(&mut self) -> Result<()> {
+        let mut sender: SimpleSender = SimpleSender::new();
+        while let Some(_block) = self.commit.recv().await {
+            let certify_block = CBlock::new(
+                self.shard_id,
+                _block.author,
+                _block.round,
+                _block.digest(),
+                _block.payload.clone(), // TODO: hash of new cross-shard txs
+                HashMap::new(), // TODO: votes messages for the execution results of cross-shard txs
+                _block.qc.votes.clone(),
+                _block.signature.clone(),
+            )
+            .await;
+            let message =
+                bincode::serialize(&certify_block.clone()).expect("fail to serialize the CBlock");
+            sender.send(self.ordering_addr, Into::into(message)).await;
+
+            // info!("send a certificate block {:?} to the ordering shard", certify_block.clone());
         }
         Ok(())
     }

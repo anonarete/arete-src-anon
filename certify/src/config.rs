@@ -26,10 +26,7 @@ impl CertifyParameters {
     pub fn log(&self) {
         // NOTE: These log entries are used to compute performance.
         info!("Timeout delay set to {} rounds", self.certify_timeout_delay);
-        info!(
-            "Sync retry delay set to {} ms",
-            self.certify_sync_retry_delay
-        );
+        info!("Sync retry delay set to {} ms", self.certify_sync_retry_delay);
     }
 }
 
@@ -47,11 +44,7 @@ pub struct ExecutionCommittee {
 }
 
 impl ExecutionCommittee {
-    pub fn new(
-        info: Vec<(PublicKey, Stake, SocketAddr)>,
-        epoch: EpochNumber,
-        liveness_threshold: f32,
-    ) -> Self {
+    pub fn new(info: Vec<(PublicKey, Stake, SocketAddr)>, epoch: EpochNumber, liveness_threshold: f32) -> Self {
         Self {
             authorities: info
                 .into_iter()
@@ -76,7 +69,7 @@ impl ExecutionCommittee {
     // need (1-liveness_threshold)*total_stake
     pub fn quorum_threshold(&self) -> Stake {
         let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
-        ((1.0 - self.liveness_threshold) * total_votes as f32).ceil() as u32
+        ((1.0-self.liveness_threshold) * total_votes as f32).ceil() as u32
     }
 
     pub fn address(&self, name: &PublicKey) -> Option<SocketAddr> {

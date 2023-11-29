@@ -57,11 +57,6 @@ def main(n, k, s_t):
     m_min=minCSize(n, n*Fraction(1, 3), Fraction(66, 100), k)
     print("{:<{width}}".format("CoChain", width=value_width) + "{:<{width}}".format("33.3%", width=value_width) + "{:<{width}}".format("66%", width=value_width) + "{:<{width}}".format("66%", width=value_width) + "{:<{width}}".format(m_min, width=value_width) + "{:<{width}}".format(float(1-pFailWithShardSize(n, n*Fraction(33, 100), m_min, int(m_min*Fraction(100-33, 100)))), width=value_width))
 
-    # consensus group
-    print(" ")
-    s_n = s_t
-    print("{:<{width}}".format("Beacon/Order", width=value_width) + "{:<{width}}".format(str(s_n)+"%", width=value_width) + "{:<{width}}".format("33.3%", width=value_width) + "{:<{width}}".format("33.3%", width=value_width) + "{:<{width}}".format(minCSize(n, n*Fraction(s_n, 100), Fraction(1, 3), k), width=value_width) + "{:<{width}}".format("1-2^("+str(k)+")", width=value_width))
-    
     # GEARBOX
     crps = range(0 , 34 , 1)
     print(" ")
@@ -89,12 +84,12 @@ def main(n, k, s_t):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, help="Total number of nodes")
-    parser.add_argument("--l", type=int, help="Security parameter")
+    parser.add_argument("--k", type=int, help="Security parameter")
     parser.add_argument("--s", type=int, help="The total byzantine ratio (0, 100)")
     
     args = parser.parse_args()
     
     # Compute values for n total parties and k bit security
-    main(args.n, args.l, args.s)
+    main(args.n, args.k, args.s)
     
     

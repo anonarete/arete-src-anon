@@ -1,18 +1,19 @@
-use crate::{config::ExecutionCommittee, config::Stake, consensus::ConsensusMessage};
+use crate::{config::ExecutionCommittee, consensus::ConsensusMessage, config::Stake};
 use bytes::Bytes;
 use crypto::PublicKey;
+use types::ConfirmMessage;
+use network::{CancelHandler, ReliableSender};
+use tokio::sync::mpsc::Receiver;
+use log::debug;
+use std::net::SocketAddr;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
-use network::{CancelHandler, ReliableSender};
-use std::net::SocketAddr;
-use tokio::sync::mpsc::{Receiver, Sender};
-use types::ConfirmMessage;
+
 
 pub struct ConfirmExecutor {
     name: PublicKey,
     committee: ExecutionCommittee,
     rx_confirm_message: Receiver<ConfirmMessage>,
-    tx_consensus_message: Sender<ConsensusMessage>, // Send the consensus msg to core for execute&commit
     network: ReliableSender,
 }
 
@@ -20,15 +21,13 @@ impl ConfirmExecutor {
     pub fn spawn(
         name: PublicKey,
         committee: ExecutionCommittee,
-        rx_confirm_message: Receiver<ConfirmMessage>, // receive from mempool
-        tx_consensus_message: Sender<ConsensusMessage>,
+        rx_confirm_message: Receiver<ConfirmMessage>,   // receive from mempool
     ) {
         tokio::spawn(async move {
             Self {
                 name,
                 committee,
                 rx_confirm_message,
-                tx_consensus_message,
                 network: ReliableSender::new(),
             }
             .run()
@@ -44,6 +43,7 @@ impl ConfirmExecutor {
 
     /// Broadcast the confirmation message to other executors.
     async fn broadcast_confirm_msg(&mut self, confirm_msg: ConfirmMessage) {
+        debug!("Broadcasting confirmation msg {:?}", confirm_msg);
         let (names, addresses): (Vec<_>, Vec<SocketAddr>) = self
             .committee
             .broadcast_addresses(&self.name)
@@ -75,13 +75,15 @@ impl ConfirmExecutor {
     }
 
     async fn run(&mut self) {
-        loop {
-            tokio::select! {
+        loop{
+            tokio::select!{
                 Some(message) = self.rx_confirm_message.recv() => {
-                    self.tx_consensus_message.send(ConsensusMessage::ConfirmMsg(message.clone())).await.expect("Failed to send consensus message");
                     self.broadcast_confirm_msg(message).await;
                 },
             }
+            // while let Some(message) = self.rx_confirm_message.recv().await {
+            //     self.broadcast_confirm_msg(message).await;
+            // }
         }
     }
 }

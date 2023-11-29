@@ -1,4 +1,5 @@
-use crypto::CryptoError;
+use crate::consensus::Round;
+use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
 
@@ -31,6 +32,34 @@ pub enum ConsensusError {
     #[error("Store error: {0}")]
     StoreError(#[from] StoreError),
 
+    #[error("Node {0} is not in the committee")]
+    NotInCommittee(PublicKey),
+
     #[error("Invalid signature")]
     InvalidSignature(#[from] CryptoError),
+
+    #[error("Received more than one vote from {0}")]
+    AuthorityReuse(PublicKey),
+
+    #[error("Received vote from unknown authority {0}")]
+    UnknownAuthority(PublicKey),
+
+    #[error("Received QC without a quorum")]
+    QCRequiresQuorum,
+
+    #[error("Received TC without a quorum")]
+    TCRequiresQuorum,
+
+    #[error("Malformed block {0}")]
+    MalformedBlock(Digest),
+
+    #[error("Received block {digest} from leader {leader} at round {round}")]
+    WrongLeader {
+        digest: Digest,
+        leader: PublicKey,
+        round: Round,
+    },
+
+    #[error("Invalid payload")]
+    InvalidPayload,
 }

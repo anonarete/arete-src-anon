@@ -1,33 +1,43 @@
 use crate::mempool::MempoolMessage;
 use crate::quorum_waiter::QuorumWaiterMessage;
 use bytes::Bytes;
+#[cfg(feature = "benchmark")]
+use crypto::Digest;
 use crypto::PublicKey;
-// use log::info;
+#[cfg(feature = "benchmark")]
+use ed25519_dalek::{Digest as _, Sha512};
+#[cfg(feature = "benchmark")]
+use log::info;
 use network::ReliableSender;
+use types::CBlock;
+#[cfg(feature = "benchmark")]
+use std::convert::TryInto as _;
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{sleep, Duration, Instant};
-use types::{CBlock, CrossTransactionVote};
+use tokio::time::{sleep, Duration};
 
-// pub type Transaction = Vec<u8>;
-pub type CBlockBatch = Vec<CBlock>;
+#[cfg(test)]
+#[path = "tests/batch_maker_tests.rs"]
+pub mod batch_maker_tests;
+
+pub type Transaction = Vec<u8>;
+pub type Batch = Vec<Transaction>;  
 
 /// Assemble clients transactions into batches.
 pub struct BatchMaker {
     /// The preferred batch size (in bytes).
-    batch_size: usize,
+    _batch_size: usize,
     /// The maximum delay after which to seal the batch (in ms).
     max_batch_delay: u64,
     /// Channel to receive transactions (cblock) from the network.
+    // rx_transaction: Receiver<Transaction>,
     rx_transaction: Receiver<CBlock>,
-    /// receive vote from transaction channel
-    rx_vote_tx: Receiver<CrossTransactionVote>,
     /// Output channel to deliver sealed batches to the `QuorumWaiter`.
     tx_message: Sender<QuorumWaiterMessage>,
     /// The network addresses of the other mempools.
     mempool_addresses: Vec<(PublicKey, SocketAddr)>,
     /// Holds the current batch.
-    current_batch: CBlockBatch,
+    current_batch: Batch,
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other mempools.
@@ -36,22 +46,20 @@ pub struct BatchMaker {
 
 impl BatchMaker {
     pub fn spawn(
-        batch_size: usize,
+        _batch_size: usize,
         max_batch_delay: u64,
         rx_transaction: Receiver<CBlock>,
-        rx_vote_tx: Receiver<CrossTransactionVote>,
         tx_message: Sender<QuorumWaiterMessage>,
         mempool_addresses: Vec<(PublicKey, SocketAddr)>,
     ) {
         tokio::spawn(async move {
             Self {
-                batch_size,
+                _batch_size,
                 max_batch_delay,
                 rx_transaction,
-                rx_vote_tx,
                 tx_message,
                 mempool_addresses,
-                current_batch: CBlockBatch::with_capacity(batch_size * 2),
+                current_batch: Batch::with_capacity(_batch_size * 2),
                 current_batch_size: 0,
                 network: ReliableSender::new(),
             }
@@ -62,35 +70,21 @@ impl BatchMaker {
 
     /// Main loop receiving incoming transactions and creating batches.
     async fn run(&mut self) {
-        let timer = sleep(Duration::from_millis(self.max_batch_delay));
-        tokio::pin!(timer);
+        let _timer = sleep(Duration::from_millis(self.max_batch_delay));
+        tokio::pin!(_timer);
 
         loop {
             tokio::select! {
                 // Receive transaction (CBlock).
-                Some(cblock) = self.rx_transaction.recv() => {
-                    // Broadcast to other peers and send it to consensus for further processing
-                    // let serialize_cblock = bincode::serialize(&transaction)
-                    //     .expect("Fail to serialize transaction");
-                    // info!("ARETE trace: start cblock size {}", cblock.size());
-                    self.current_batch_size += cblock.size();
-                    self.current_batch.push(cblock);
-                    if self.current_batch_size >= self.batch_size {
-                        self.seal().await;
-                        timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
-                    }
-                    
+                Some(transaction) = self.rx_transaction.recv() => {
+                    // Broadcast to other peers and send it to consensus for further processing 
+                    #[cfg(feature = "benchmark")]
+                    info!("Successfully receive cblock");
+                    let serialize_cblock = bincode::serialize(&transaction)
+                        .expect("Fail to serialize transaction");
+                    self.current_batch.push(serialize_cblock);
+                    self.seal().await;
                 },
-                // If the timer triggers, seal the batch even if it contains few transactions.
-                () = &mut timer => {
-                    if !self.current_batch.is_empty() {
-                        self.seal().await;
-                    }
-                    timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
-                }
-                Some(vote) = self.rx_vote_tx.recv() => {
-                    self.broadcast_vote(vote).await;
-                }
             }
 
             // Give the change to schedule other tasks.
@@ -100,17 +94,50 @@ impl BatchMaker {
 
     /// Seal and broadcast the current batch.
     async fn seal(&mut self) {
-        // info!("ARETE trace: start batch {} cblocks", self.current_batch.len());
+        #[cfg(feature = "benchmark")]
+        let size = self.current_batch_size;
+
+        // Look for sample txs (they all start with 0) and gather their txs id (the next 8 bytes).
+        #[cfg(feature = "benchmark")]
+        let tx_ids: Vec<_> = self
+            .current_batch
+            .iter()
+            .filter(|tx| tx[0] == 0u8 && tx.len() > 8)
+            .filter_map(|tx| tx[1..9].try_into().ok())
+            .collect();
+
         // Serialize the batch.
         self.current_batch_size = 0;
-        // let batch: Vec<_> = self.current_batch.drain(..).collect();
+        let batch: Vec<_> = self.current_batch.drain(..).collect();
         // ARETE: replace 'batch' with 'Transaction'
         // Only send the first transaction of the batch
-        // let tx = batch[0].clone();
-        let cblock_batch: Vec<_> = self.current_batch.drain(..).collect();
-        // let cblock: CBlock = bincode::deserialize(&tx).expect("fail to deserialize the CBlock");
-        let message = MempoolMessage::Batch(cblock_batch);
+        let tx = batch[0].clone();
+        let cblock: CBlock = bincode::deserialize(&tx)
+            .expect("fail to deserialize the CBlock");
+        let message = MempoolMessage::CBlock(cblock);
         let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
+
+        #[cfg(feature = "benchmark")]
+        {
+            // NOTE: This is one extra hash that is only needed to print the following log entries.
+            let digest = Digest(
+                Sha512::digest(&serialized).as_slice()[..32]
+                    .try_into()
+                    .unwrap(),
+            );
+
+            for id in tx_ids {
+                // NOTE: This log entry is used to compute performance.
+                info!(
+                    "Batch {:?} contains sample tx {}",
+                    digest,
+                    u64::from_be_bytes(id)
+                );
+            }
+
+            // NOTE: This log entry is used to compute performance.
+            info!("Batch {:?} contains {} B", digest, size);
+        }
 
         // Broadcast the batch through the network.
         // A batch is a Vec<Transaction>
@@ -126,17 +153,5 @@ impl BatchMaker {
             })
             .await
             .expect("Failed to deliver batch");
-    }
-
-    async fn broadcast_vote(&mut self, vote: CrossTransactionVote) {
-        // info!("ARETE trace: start send vote");
-        let message = MempoolMessage::CrossTransactionVote(vote);
-        let serialized = bincode::serialize(&message).expect("Failed to serialize vote");
-
-        // Broadcast the batch through the network.
-        // A batch is a Vec<Transaction>
-        let (_, addresses): (Vec<_>, _) = self.mempool_addresses.iter().cloned().unzip();
-        let bytes = Bytes::from(serialized.clone());
-        let _ = self.network.broadcast(addresses, bytes).await;
     }
 }
