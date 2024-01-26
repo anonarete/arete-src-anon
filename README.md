@@ -1,5 +1,8 @@
-# ARETE
-Blockchain Sharding Made Practical. This implementation is based on [Alberto's Hotstuff codebase](https://github.com/asonnino/hotstuff).
+# A General Sharding Protocol
+This branch implements a general blockchain sharding protocol as the comparison of Arete.
+
+## Features
+The general sharding protocol supports flexibly setting different system parameters, including the shard size, the number of shards, the ratio of cross-shard transactions, the security threshold, etc. (see  [localShard function](https://github.com/anonarete/arete-src-anon/blob/sota/benchmark/fabfile.py#L63)). It also supports the performance evaluation of the sharding system under crashed attacks.
 
 ## Quick Start
 
@@ -55,4 +58,4 @@ This command may take a long time the first time you run it (compiling rust code
 ```
 
 ## AWS test
-See [this wiki document](https://github.com/anonarete/arete-src-anon/wiki/AWS-Benchmark).
+To evaluate it on Amazon Web Services, refer to [this wiki document](https://github.com/anonarete/arete-src-anon/wiki/AWS-Benchmark).
