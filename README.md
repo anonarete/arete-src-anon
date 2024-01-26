@@ -1,5 +1,5 @@
 # ARETE
-Blockchain Sharding Made Practical. This implementation is based on [Alberto's Hotstuff codebase](https://github.com/asonnino/hotstuff).
+An implementation for the paper: *Sharding SMR with Optimal-size Shards for Highly Scalable Blockchains*. The consensus protocol is based on the [Hotstuff codebase](https://github.com/asonnino/hotstuff) implemented by Alberto Sonnino.
 
 ## Quick Start
 
@@ -55,7 +55,7 @@ This command may take a long time the first time you run it (compiling rust code
 ```
 
 ## Comparison Sharding
-See [branch](https://github.com/anonarete/arete-src-anon/tree/sota)
+To evaluate the comparison sharding, refer to [branch](https://github.com/anonarete/arete-src-anon/tree/sota)
 
 ## AWS test
-See [this wiki document](https://github.com/anonarete/arete-src-anon/wiki/AWS-Benchmark).
+To evaluate our protocol in Amazon Web Services, refer to [this wiki document](https://github.com/anonarete/arete-src-anon/wiki/AWS-Benchmark).
